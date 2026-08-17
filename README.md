@@ -11,12 +11,17 @@ Claude Skills and guides for shipping and running solo-dev infrastructure.
 | [`docs/00-handoff.md`](docs/00-handoff.md) | Original architecture handoff, preserved as received |
 | [`docs/01-review.md`](docs/01-review.md) | Review of that handoff — 17 findings, every claim re-verified |
 | [`docs/02-plan.md`](docs/02-plan.md) | Build plan, phased |
+| [`docs/03-decisions.md`](docs/03-decisions.md) | Decision record — supersedes the handoff where they conflict |
 
 Read them in that order. Where the handoff and the review disagree, **the review wins** — it carries the sources.
 
 ## Status
 
-Planning complete. Nothing provisioned. Blocked on six decisions in [`02-plan.md` Phase 0](docs/02-plan.md#phase-0--decisions-and-scaffold).
+Planning complete. Nothing provisioned yet.
+
+Four of six decisions made: split-container backups, nginx dropped for launch, stack-agnostic deploy contract, and staging on a separate server. Two open — domain/Cloudflare zone, and the alert channel. Neither blocks starting Phase 0.
+
+Staging is provisioned **before** production, deliberately: it rehearses the one irreversible step (deleting public SSH) on a box where lockout costs nothing, and it's the only honest test that `vps-provision` works on a machine it wasn't written against.
 
 ## Skills planned
 
