@@ -8,9 +8,17 @@ Supersedes handoff §2 where they conflict. Each entry is dated and carries its 
 
 **Decided 2026-08-17.** Resolves [F1](01-review.md#f1--the-backup-job-contradicts-the-network-design-), the blocking conflict.
 
-A dump sidecar sits on the `data` network (`internal: true`) and writes to a shared volume. A separate uploader holds the R2 credentials and internet access but has **no** database access.
+A dump sidecar sits on the `data` network (`internal: true`) and writes to a shared volume. A separate uploader holds the R2 credentials and internet access but has **no** database access. The sidecar **encrypts the dump to a public key** before the file becomes visible to the uploader, and publishes it atomically.
 
 **Why:** the alternative — one container on both networks — works, but that container can read every row *and* talk to the internet. That's the exact capability shape §7's read-only-agent reasoning exists to prevent; granting it to a backup job while denying it to the ops agent would be incoherent. Cost is one extra container and a volume.
+
+**Why encryption is load-bearing, not a nice-to-have.** *Amended 2026-08-17 after PR review.* Splitting the containers alone doesn't actually deliver the separation: the uploader must read the dump to upload it, and the dump is every row. Unencrypted, the uploader ends up holding complete row data plus egress — precisely what the split was meant to prevent. Encrypting at the boundary is what makes the claim true. It also means a compromised R2 or B2 account yields ciphertext.
+
+**Consequences, accepted deliberately:**
+
+- The restore drill must decrypt, so key handling is part of Phase 2a rather than an afterthought.
+- The private key is escrowed offline — password manager plus a second offline copy — never on the app server, supplied to the drill at run time over the admin plane. **An unescrowed key turns every backup into ciphertext nobody can open.** The monthly drill is what proves the key still works.
+- Publication is atomic: temp name → fsync → encrypt → checksum → atomic rename. Otherwise a scheduled uploader can ship a half-written dump, and the bucket lock makes that truncated object immutable for 30 days.
 
 ---
 

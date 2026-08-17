@@ -37,11 +37,21 @@ One-time hardening runbook, written for someone who hasn't read it in eight mont
 
 ### Review changes folded in
 
-- **F7 — the SSH gate.** The destructive step is fenced: add `ufw allow in on tailscale0 to any port 22 proto tcp` → prove **two** independent tailnet sessions → parse `ufw status numbered` and assert no port-22 rule lacks an interface scope → *only then* delete the generic rule. The out-of-band recovery path (provider console) is confirmed and written down **before** any of it. Order is never reversed.
+- **F7 — the SSH gate.** The out-of-band recovery path (provider console) is confirmed and written down **before** any of this. Then, in order:
 
-  A generic `22/tcp ALLOW IN Anywhere` silently defeats an interface-scoped rule — that's the trap, and it's why the assertion parses the rule list rather than trusting that the allow succeeded.
+  1. Add `ufw allow in on tailscale0 to any port 22 proto tcp`.
+  2. Prove **two** independent live sessions over the tailnet.
+  3. Assert the `tailscale0` rule exists and is well-formed — right interface, port, protocol. Assert the generic public rule is present and **identify it by number**; this is the deletion target.
+  4. **While both test sessions stay open**, delete only that identified rule.
+  5. Post-condition: re-parse `ufw status numbered` and assert no port-22 rule lacks an interface scope.
 
-- **F6 — `DOCKER-USER` default DROP**, persisted across reboot. ufw governs INPUT; Docker publishes via NAT/FORWARD. ufw alone does not govern a Docker host.
+  The assertion that no unscoped rule exists is a **post**-condition, not a precondition — it cannot be true before step 4, since the generic rule is exactly what makes it false. Keeping the sessions open across the deletion is what leaves a repair path if step 4 goes wrong.
+
+  A generic `22/tcp ALLOW IN Anywhere` silently defeats an interface-scoped rule — that's the trap, and it's why every step parses the rule list rather than trusting that a command succeeded.
+
+- **F6 — `DOCKER-USER`, scoped to inbound.** ufw governs INPUT; Docker publishes via NAT/FORWARD, so ufw alone does not govern a Docker host.
+
+  **Not a chain-wide DROP.** `DOCKER-USER` sits in the FORWARD chain, which container-*originated* traffic also traverses — a blanket drop would cut `cloudflared`'s connection to Cloudflare's edge and the uploader's reach to R2/B2, breaking the outbound-only design this whole architecture rests on. Scope it: accept `RELATED,ESTABLISHED` first (return traffic for container-initiated connections), then drop new inbound arriving on the public interface. Container egress is untouched. Persisted across reboot, and verified by asserting both properties — nothing reaches a container from outside, and a container can still reach the internet.
 - **F15 — locally-managed tunnel.** `config.yml` in the repo, terminating `- service: http_status:404` catch-all, `cloudflared` on a user-defined network, image pinned ≥ 2026.5.2 for its startup connectivity pre-checks.
 - **D2 — no nginx.** `edge` and `app` collapse into one network. Two networks, not three.
 - One deliberate reboot with `systemctl is-enabled` asserted across every stateful unit, before trusting an unattended one.
@@ -64,7 +74,13 @@ Per F12: prove the machinery against a **seeded toy schema**, before a real sche
 
 ### Review changes folded in
 
-- **D1 / F1 — split containers.** Dump sidecar on `data` (`internal: true`) writes to a shared volume; uploader holds R2 credentials and internet but no DB access. Neither process holds read-all-rows *and* egress.
+- **D1 / F1 — split containers, with the dump encrypted at the boundary.** Dump sidecar on `data` (`internal: true`) writes to a shared volume; uploader holds R2 credentials and internet but no DB access.
+
+  Splitting the containers alone does **not** deliver the capability separation it appears to: the uploader has to read the dump to upload it, and the dump *is* every row. Without encryption the uploader holds complete row data plus egress — the shape the split exists to prevent. So the sidecar encrypts to a **public key** before the file becomes visible to the uploader, which only ever handles ciphertext. That also means a compromised R2 *or* B2 account yields ciphertext, which is worth having on its own.
+
+  **Consequence, stated rather than glossed:** the restore drill must decrypt, so the private key has to reach the drill. Key handling is now part of this phase, not an afterthought — the key is escrowed offline (password manager plus a second offline copy), never on the app server, and supplied to the drill at run time over the admin plane. An unescrowed key turns every backup into ciphertext nobody can open. The monthly drill is what proves the key still works, which closes the same loop the handoff already argues for restores.
+
+- **Atomic handoff between the two containers.** A scheduled uploader can otherwise catch a dump mid-write and ship a truncated object — which the bucket lock then makes immutable for 30 days, and which may become the newest dump the drill tests or a real restore reaches for. Protocol: write under a temporary name, fsync, encrypt, checksum, then **atomically rename** into the pickup location. The uploader considers only finalized names; the drill verifies the checksum before asserting anything about contents.
 - **F4 — token tier is part of the guarantee.** Server credential is **Object Read & Write, bucket-scoped** — never Admin. An Admin token can edit bucket config and therefore *remove the lock*, which makes the 30-day immutability decorative. Assert the tier at setup. Account API token, not User — a User token dies with its user and takes backups down silently.
 - **F11 — don't hardcode wrangler flags.** Read `--help`, then assert the rule exists via `wrangler r2 bucket lock list`. The assertion is the deliverable; flag spelling drifts.
 - **F13 — pin Postgres by digest**, and assert the drill container's major version **matches the source**. `pg_restore` into a newer major succeeds, so a drifted drill passes while testing a path production never takes. A drill that lies is worse than no drill.
