@@ -1,0 +1,42 @@
+# Locally-managed tunnel configuration.
+#
+# Deliberately not dashboard-managed. Remote management is Cloudflare's 2026
+# default and it is genuinely convenient, but it puts production routing config
+# outside the repository, outside code review, and outside git history —
+# changeable by anyone with dashboard access, with no record of who changed
+# what. That is the property this architecture rejects everywhere else, so it is
+# rejected here too. The token still authenticates the connector; only the
+# routing lives in the repo.
+
+tunnel: REPLACE_WITH_TUNNEL_ID
+credentials-file: /etc/cloudflared/credentials.json
+
+# Reduce log noise once things are stable; `debug` while bringing it up.
+loglevel: info
+
+originRequest:
+  connectTimeout: 10s
+  noTLSVerify: false
+  # The tunnel talks to the API over the internal Docker network, so there is no
+  # TLS to terminate here. TLS terminates at Cloudflare's edge.
+
+ingress:
+  # The public API. `api` resolves through Docker's embedded DNS, which only
+  # works because cloudflared and the API share a user-defined network. On the
+  # default bridge this silently fails to resolve and looks like the app is down.
+  - hostname: api.example.com
+    service: http://api:8000
+
+  # Anything that is NOT the public API goes behind a Cloudflare Access policy —
+  # or, better, stays off the tunnel entirely and binds to the Tailscale
+  # interface. A bare tunnel hostname is a public URL, scanned within days.
+  #
+  # - hostname: admin.example.com
+  #   service: http://api:8000
+  #   # Access policy configured in the Cloudflare dashboard, BEFORE this goes
+  #   # live. Not after.
+
+  # Required, and must be last. cloudflared evaluates rules top to bottom and
+  # needs a terminating catch-all; without one, an unmatched request fails with
+  # nothing useful in either log, and it is a genuinely miserable hour to debug.
+  - service: http_status:404

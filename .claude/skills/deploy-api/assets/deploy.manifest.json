@@ -1,0 +1,78 @@
+{
+  "$comment": [
+    "The deploy contract. deploy-api reads this instead of guessing your stack.",
+    "",
+    "Making it explicit is what lets one skill deploy a Go binary and a Django app",
+    "without knowing anything about either. It also forces the migration rollback",
+    "path to be declared rather than assumed — that is the one thing an agent",
+    "genuinely cannot infer from your repository, and the thing you need most at",
+    "the exact moment you are least able to work it out.",
+    "",
+    "Copy to deploy.manifest.json in the repo root and fill in."
+  ],
+
+  "service": "api",
+
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile",
+    "$comment": "Base images must be digest-pinned inside the Dockerfile too; check-invariants.sh only sees compose."
+  },
+
+  "listen_port": 8000,
+  "$comment_port": "Container-internal only. Nothing is published to the host — cloudflared reaches this over a user-defined network by service name.",
+
+  "health": {
+    "path": "/healthz",
+    "expect_status": 200,
+    "timeout_seconds": 60,
+    "interval_seconds": 2,
+    "$comment": [
+      "Must not depend on the database being WRITABLE. A health check that writes",
+      "turns a read-only replica or a full disk into a failed deploy and an",
+      "automatic rollback, which is the opposite of useful during an incident.",
+      "Checking the process is up and can read is the right altitude."
+    ]
+  },
+
+  "readiness": {
+    "$comment": "How to tell 'the process started' from 'it is serving'. Deploying on the first signal races the second and produces phantom failures.",
+    "path": "/readyz",
+    "expect_status": 200
+  },
+
+  "migrate": {
+    "up": "npm run migrate:up",
+    "down": "npm run migrate:down",
+    "irreversible": false,
+    "$comment_down": [
+      "The down path is the deliverable, not a formality. If a migration genuinely",
+      "cannot be reversed — a dropped column, a destructive backfill — set",
+      "irreversible to true and say why in irreversible_reason. deploy-api then",
+      "refuses to proceed without a fresh verified backup, because the restore",
+      "IS the rollback at that point.",
+      "",
+      "Prefer expand-contract for anything destructive: add the new column, backfill,",
+      "switch reads, deploy, and only drop the old column in a later release once",
+      "the previous version is no longer running. Each step is individually",
+      "reversible, which is what makes the sequence safe."
+    ],
+    "irreversible_reason": null
+  },
+
+  "rollback": {
+    "strategy": "previous-digest",
+    "$comment": "Redeploy the previously running image digest. deploy-api records it before each deploy; without that record there is nothing to roll back TO."
+  },
+
+  "environments": {
+    "staging": {
+      "compose_file": "infra/compose.yml",
+      "compose_override": "infra/compose.staging.yml"
+    },
+    "prod": {
+      "compose_file": "infra/compose.yml",
+      "compose_override": "infra/compose.prod.yml"
+    }
+  }
+}
