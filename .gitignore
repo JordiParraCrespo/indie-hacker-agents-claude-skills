@@ -1,0 +1,25 @@
+# Secrets and host-specific config.
+#
+# Being git-ignored is not the same as being absent from the repository — a file
+# committed before it was ignored stays in history forever. Pair this with a
+# secret scan in CI, and if something does land, rotate the credential rather
+# than just deleting the file.
+
+infra/targets.env
+*.env
+!*.env.example
+
+# Encryption keys. The age private key should never be near this repo at all;
+# this is a backstop, not a strategy.
+*.key
+*key.txt
+age-key*
+credentials.json
+rclone.conf
+
+# Deploy state — rollback targets and staging-green markers. Local, per-machine.
+.deploy-state/
+
+# Local scratch
+*.log
+.DS_Store

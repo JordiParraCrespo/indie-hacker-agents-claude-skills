@@ -1,0 +1,144 @@
+# Reference stack. Two networks, nothing published to the host.
+#
+# Validate before deploying:
+#     .claude/skills/deploy-api/scripts/check-invariants.sh infra/compose.yml
+#
+# Digests below are PLACEHOLDERS. Replace them with real ones:
+#     docker buildx imagetools inspect postgres:18-alpine --format '{{.Manifest.Digest}}'
+#
+# nginx is deliberately absent. For a single service, cloudflared routes straight
+# to the API, and Cloudflare's edge already provides rate limiting and
+# request-size caps — so nginx would add a network-facing component with two
+# critical rewrite-module CVEs in one quarter (CVE-2026-42945 and CVE-2026-9256,
+# where the fix for the first still leaves you exposed to the second) in exchange
+# for capability you already have. Reintroduce it when a second service appears.
+
+name: app
+
+networks:
+  # cloudflared + api. Needs outbound to reach Cloudflare's edge.
+  edge:
+    driver: bridge
+
+  # api + postgres. internal: true means no gateway is attached, so nothing here
+  # has a route to the internet. That is what closes the exfiltration path — and
+  # it is also why the backup job is split in two, since a single container
+  # cannot reach both Postgres and R2.
+  data:
+    driver: bridge
+    internal: true
+
+volumes:
+  pgdata:
+  backup-work:
+
+secrets:
+  # Outside Swarm these are bind mounts of host files, not an encrypted store.
+  # They deliver the intended win — the value stays out of `docker inspect`,
+  # /proc/<pid>/environ, and logs — and nothing more. So the host files must be
+  # root-owned chmod 600 and live outside the git worktree.
+  postgres_password:
+    file: /srv/secrets/postgres_password
+  app_db_password:
+    file: /srv/secrets/app_db_password
+  backup_db_password:
+    file: /srv/secrets/backup_db_password
+  tunnel_token:
+    file: /srv/secrets/tunnel_token
+
+services:
+  db:
+    image: postgres:18-alpine@sha256:REPLACE_WITH_REAL_DIGEST
+    restart: unless-stopped
+    networks: [data]          # data only — attaching it elsewhere defeats internal: true
+    # No ports. Not even 127.0.0.1. Reach it with:
+    #     docker compose exec db psql -U postgres
+    # over the tailnet.
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: app
+    secrets: [postgres_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks: [edge, data]    # edge to be reachable by cloudflared, data to reach db
+    environment:
+      DATABASE_URL_FILE: /run/secrets/app_db_password
+      # The app must derive client IP from Cloudflare's forwarded headers and
+      # must never grant trust based on the peer address. Behind a proxy every
+      # request arrives from a local address, so "localhost is trusted" logic
+      # silently hands that trust to the entire internet.
+      TRUST_PROXY: "true"
+    secrets: [app_db_password]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.6.0@sha256:REPLACE_WITH_REAL_DIGEST
+    restart: unless-stopped
+    networks: [edge]          # user-defined network: service-name DNS does not
+                              # resolve on the default bridge
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - /srv/secrets/tunnel-credentials.json:/etc/cloudflared/credentials.json:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # --- backup: two containers, deliberately ---------------------------------
+  # Splitting these is not cosmetic. The uploader has to READ the dump to upload
+  # it, and the dump is every row in the database — so without encryption the
+  # uploader would hold complete customer data plus internet access, which is
+  # exactly the combination the split exists to prevent. The sidecar encrypts to
+  # a public key; the uploader only ever sees ciphertext.
+
+  backup-dump:
+    image: postgres:18-alpine@sha256:REPLACE_WITH_REAL_DIGEST
+    restart: "no"
+    networks: [data]          # database access, NO internet
+    profiles: [backup]        # invoked by the scheduler, not `up`
+    environment:
+      PGHOST: db
+      PGUSER: backup_user
+      PGDATABASE: app
+      PGPASSWORD_FILE: /run/secrets/backup_db_password
+      AGE_RECIPIENT: ${AGE_RECIPIENT:?set AGE_RECIPIENT to the age public key}
+    secrets: [backup_db_password]
+    volumes:
+      - backup-work:/work
+      - ../.claude/skills/db-backup-verify/scripts/dump.sh:/usr/local/bin/dump.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/dump.sh"]
+
+  backup-upload:
+    image: rclone/rclone:1.71@sha256:REPLACE_WITH_REAL_DIGEST
+    restart: "no"
+    networks: [edge]          # internet, NO database access
+    profiles: [backup]
+    environment:
+      R2_BUCKET: ${R2_BUCKET:?}
+      R2_PREFIX: postgres/
+      B2_BUCKET: ${B2_BUCKET:-}
+    volumes:
+      - backup-work:/work
+      - /srv/secrets/rclone.conf:/config/rclone/rclone.conf:ro
+      - ../.claude/skills/db-backup-verify/scripts/upload.sh:/usr/local/bin/upload.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/upload.sh"]

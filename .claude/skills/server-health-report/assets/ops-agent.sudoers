@@ -1,0 +1,76 @@
+# /etc/sudoers.d/ops-agent — the OS-level half of the read-only guarantee.
+#
+# Install with:
+#     sudo install -m 0440 -o root -g root ops-agent.sudoers /etc/sudoers.d/ops-agent
+#     sudo visudo -c            # ALWAYS validate; a broken sudoers file locks out sudo
+#
+# WHY NOT JUST ADD THE USER TO THE `docker` GROUP
+#
+# Because group `docker` is equivalent to host root. Anyone in it can run
+#
+#     docker run -v /:/host -it alpine chroot /host
+#
+# and own the machine. It is not "read-only access to Docker" — it is a root
+# shell with extra steps, and it silently voids every other control here. This
+# is the single most common way a "read-only agent" turns out not to be one.
+#
+# WHY THIS LAYER IS NOT OPTIONAL
+#
+# The skill's frontmatter restrictions (disallowed-tools) clear at the user's
+# next message — they are a per-turn grant, not a sandbox. Prompt-level
+# instructions are advisory. This file is the only layer that holds regardless
+# of what the model decides, what a log line says, or how a conversation goes.
+#
+# ---------------------------------------------------------------------------
+
+Cmnd_Alias OPS_DOCKER_READ = \
+    /usr/bin/docker ps, \
+    /usr/bin/docker ps *, \
+    /usr/bin/docker inspect *, \
+    /usr/bin/docker compose -f /srv/app/compose.yml logs *, \
+    /usr/bin/docker compose -f /srv/app/compose.yml ps, \
+    /usr/bin/docker compose -f /srv/app/compose.yml ps *
+
+Cmnd_Alias OPS_HOST_READ = \
+    /bin/systemctl status *, \
+    /bin/systemctl is-active *, \
+    /bin/systemctl is-enabled *, \
+    /bin/systemctl list-units *, \
+    /bin/systemctl list-unit-files *, \
+    /bin/journalctl --no-pager *, \
+    /usr/bin/apt list --upgradable
+
+Cmnd_Alias OPS_NET_READ = \
+    /usr/sbin/ufw status, \
+    /usr/sbin/ufw status *, \
+    /usr/sbin/iptables -C DOCKER-USER *, \
+    /usr/sbin/iptables -S DOCKER-USER, \
+    /usr/sbin/iptables -L DOCKER-USER *
+
+ops-agent ALL=(root) NOPASSWD: OPS_DOCKER_READ, OPS_HOST_READ, OPS_NET_READ
+
+# Explicitly refuse the shapes that would turn a read into a write. sudoers
+# wildcards are permissive — `docker inspect *` would happily match arguments
+# you did not intend — so the denials are as load-bearing as the grants, and
+# they must come last to take precedence.
+ops-agent ALL=(root) !/usr/bin/docker exec *
+ops-agent ALL=(root) !/usr/bin/docker run *
+ops-agent ALL=(root) !/usr/bin/docker restart *
+ops-agent ALL=(root) !/usr/bin/docker stop *
+ops-agent ALL=(root) !/usr/bin/docker rm *
+ops-agent ALL=(root) !/usr/bin/docker rmi *
+ops-agent ALL=(root) !/usr/bin/docker cp *
+ops-agent ALL=(root) !/usr/bin/docker compose * up *
+ops-agent ALL=(root) !/usr/bin/docker compose * down *
+ops-agent ALL=(root) !/usr/bin/docker compose * restart *
+ops-agent ALL=(root) !/usr/bin/docker compose * exec *
+ops-agent ALL=(root) !/usr/bin/docker compose * run *
+
+# Verify after installing — assumption is not evidence:
+#     sudo -u ops-agent sudo -n docker ps            # should succeed
+#     sudo -u ops-agent sudo -n docker restart api   # should be refused
+#     sudo -u ops-agent sudo -n -l                   # review what is actually granted
+#
+# Adjust the binary paths for your distribution. `command -v docker` on Ubuntu
+# gives /usr/bin/docker; a snap install differs, and a wrong path silently
+# grants nothing (safe) or matches more than you meant (not safe).
