@@ -27,11 +27,25 @@ Unattended-Upgrade::Allowed-Origins {
 };
 ```
 
+Edit `50unattended-upgrades` itself, or start a drop-in with
+`#clear Unattended-Upgrade::Allowed-Origins;`. apt **appends** list entries
+across files, so a drop-in that only declares the security origins leaves the
+defaults in place too, and the scoping silently does nothing. The dry run below
+prints the effective `Allowed origins` — check it says what you meant.
+
 **Dry-run before trusting it:**
 
 ```bash
 sudo unattended-upgrade --dry-run --debug
 ```
+
+## The console needs a password nobody has
+
+Key-only users (`lock_passwd: true`, root login off) are right for SSH and
+useless at a provider's web console, which is a login prompt. Know the
+provider's way to set a root password from outside the OS before you need it —
+on Hetzner Cloud: the server → Rescue → *Reset root password*, then Console.
+`PermitRootLogin no` only governs SSH, so root works at the console.
 
 ## needrestart
 

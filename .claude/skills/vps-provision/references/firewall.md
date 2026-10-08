@@ -80,12 +80,25 @@ can't reconnect after a restart.
 
 ## Persistence
 
-iptables rules do not survive a reboot on their own. `iptables-persistent`
-(`netfilter-persistent save`) writes them to `/etc/iptables/`. Without it the
+iptables rules do not survive a reboot on their own. Without persistence the
 protection silently disappears at the first reboot — and since the stack
 publishes nothing anyway, you may not notice for months.
 
-Install it, save, then reboot deliberately and re-run `verify` before trusting it.
+**Do not use `iptables-persistent` on Ubuntu.** The package `Conflicts` with
+ufw, so installing it removes ufw — and with it the INPUT policy and the
+tailnet-only SSH rule. `apt-get install -s iptables-persistent` shows the
+`Remv ufw` line if you want to see it for yourself.
+
+`docker-firewall.sh apply` instead installs itself to
+`/usr/local/sbin/docker-firewall.sh` and enables `docker-user-firewall.service`:
+a oneshot unit, `After=` and `PartOf=docker.service`, that re-runs `apply`
+whenever Docker starts. That covers a reboot *and* a `systemctl restart docker`
+(after editing `daemon.json`, say). `verify` fails if the unit is not enabled.
+
+Right after a Docker restart the unit is briefly `activating`; a script that
+checks `systemctl is-active` immediately will see that and stop. Wait for it.
+
+Then reboot deliberately and re-run `verify` before trusting it.
 
 ## IPv6
 

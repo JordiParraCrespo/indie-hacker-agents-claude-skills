@@ -103,14 +103,20 @@ is_tailnet_addr() {
 
 # Distinct peers, not raw connection count — one client opening three channels
 # is still one way back in. The point of requiring two is that they are
-# independent: if one dies mid-cutover the other is your repair path.
+# independent: if one dies mid-cutover the other is your repair path. Two
+# sessions from the same laptop therefore count once: open the second from
+# another tailnet device (a phone SSH app is enough).
+#
+# With a `state` filter, `ss` drops its State column, so the peer is field 4
+# (Recv-Q Send-Q Local Peer), not 5. Reading field 5 yields an empty string,
+# every session is discarded, and the gate reports 0 forever.
 count_tailnet_ssh_peers() {
   local n=0 addr
   while read -r peer; do
     addr="${peer%:*}"; addr="${addr#[}"; addr="${addr%]}"
     is_tailnet_addr "$addr" && n=$((n + 1))
   done < <(ss -Htn state established '( sport = :22 )' 2>/dev/null \
-            | awk '{print $5}' | sed 's/:[0-9]*$//' | sort -u)
+            | awk '{print $4}' | sed 's/:[0-9]*$//' | sort -u)
   printf '%d' "$n"
 }
 
@@ -151,7 +157,7 @@ cmd_check() {
   if [ "$peers" -ge "$MIN_SESSIONS" ]; then
     ok "${peers} independent tailnet SSH session(s) live (need ${MIN_SESSIONS})"
   else
-    warn "only ${peers} tailnet SSH session(s) live, need ${MIN_SESSIONS} — open another and re-check"
+    warn "only ${peers} independent tailnet SSH session(s) live, need ${MIN_SESSIONS} — sessions from one machine count once; open one from another tailnet device and re-check"
     failed=1
   fi
 

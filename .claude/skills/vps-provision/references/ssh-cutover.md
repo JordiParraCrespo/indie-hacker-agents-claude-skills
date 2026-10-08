@@ -37,6 +37,13 @@ you're mid-delete — a flaky link, a laptop sleeping — you have nothing. The
 second session costs one terminal and is the difference between "undo the rule"
 and "find the provider console credentials".
 
+**Two machines, not two terminals.** The gate counts distinct client addresses:
+two sessions from the same laptop die together when its link does, so they
+count once. Open the second from another tailnet device — a phone SSH client is
+enough. If there is no second device, `MIN_SESSIONS=1` lowers the bar, but only
+on a human's explicit say-so, and only after the provider console has been
+opened once and shown a login prompt.
+
 **Sessions stay open across the deletion.** Deleting a firewall rule doesn't
 terminate established connections, so the sessions you proved in step 2 survive
 step 4 and remain your repair path. Close them only after a *fresh* tailnet

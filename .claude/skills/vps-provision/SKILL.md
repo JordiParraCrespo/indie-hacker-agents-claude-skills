@@ -64,6 +64,24 @@ Install Docker CE from Docker's own repository, not the distro package. Confirm
 Join the tailnet, disable key expiry for a server node (an expired key locks you
 out of your own admin plane at 3am), and confirm `tailscale status` is healthy.
 
+**Check the tailnet policy before tagging anything.** A new tailnet ships an
+allow-all grant (`"src": ["*"], "dst": ["*"]`). Under it a `tag:ci` node — the
+CI runner that deploys — can reach every machine you own, production included.
+Change that grant's `src` to `["autogroup:member"]` (your own untagged devices
+keep full access, nothing changes for them) and add narrow grants for the tags:
+
+```jsonc
+"tagOwners": { "tag:<server>": ["autogroup:admin"], "tag:ci": ["autogroup:admin"] },
+"grants": [
+  { "src": ["autogroup:member"], "dst": ["*"], "ip": ["*"] },
+  { "src": ["tag:ci"], "dst": ["tag:<server>"], "ip": ["tcp:22"] }
+]
+```
+
+First confirm no existing node is tagged
+(`tailscale status --json | jq '.Peer[].Tags'`) — a tagged node is not a
+`member` and would lose access under the narrowed grant.
+
 ### 4 · SSH cutover — the irreversible step
 
 This is the highest-consequence step in the whole repo. Use the script; it
@@ -162,6 +180,43 @@ scripts/verify.sh <target>
 
 Then check `systemctl is-enabled` on every stateful unit. A service that runs
 but was never enabled comes back only until the first reboot.
+
+## Provider notes: Hetzner Cloud
+
+Hetzner lets you skip the cutover's risk entirely, and that is the better path
+on a fresh box:
+
+- Create a **Cloud Firewall with no inbound rules** and attach it *at server
+  creation*. Nothing on the public IP is reachable from the first second.
+- Put a **tagged, pre-approved, single-use Tailscale auth key** in cloud-init
+  (`tailscale up --auth-key=… --advertise-tags=tag:<server>`), and the ufw rule
+  `allow in on tailscale0 to any port 22`. Tagged nodes do not expire.
+- There is then no public SSH to remove. Prove it from outside anyway:
+  `nmap -Pn -p 22,80,443,5432 <public-ip>` — every port filtered.
+
+The cloud-init user data is stored with the server, so the auth key must be
+single-use and short-lived. Recovery is the console path in
+`references/host-baseline.md`. The x86 CX line is the cheap one, but it is
+not in every location — check before choosing the location.
+
+## Running this with an agent
+
+What a session driving this through Claude Code learned:
+
+- **Run it outside auto mode.** Auto mode denies tailnet-policy edits, tag
+  changes, OAuth-client and token creation and purchases outright, even after
+  the human grants them in chat, and shows no approve prompt. In the default
+  mode each one becomes a one-click approval.
+- **Secrets never go through the agent.** For every token (R2, Tailscale OAuth,
+  CI deploy key) the agent writes a small script that prompts with
+  `read -rsp` and pipes the value straight to its destination
+  (`rclone.conf` over SSH, `gh secret set` from stdin), then verifies it works.
+  The human pastes; the agent never sees the value.
+- **Purchases are the human's click** (the server, the R2 subscription). Have
+  the form filled and the price stated, then hand over.
+- **Read the target repo's own deploy docs first.** A project may already apply
+  these skills (a `deploy/` directory, an `oppctl`); improvising a parallel
+  setup and then discovering it costs more than looking.
 
 ## Verification
 
