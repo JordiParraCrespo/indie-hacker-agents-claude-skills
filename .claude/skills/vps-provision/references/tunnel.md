@@ -53,6 +53,17 @@ Pin by digest, consistent with the rest of the stack. `cloudflared:latest` on a
 production box means an unreviewed binary change arrives whenever you happen to
 restart.
 
+## DNS goes live before the connector
+
+`cloudflared tunnel route dns <tunnel> <hostname>` creates the proxied CNAME
+immediately. Until a connector runs, the hostname serves Cloudflare's error
+1033 — nothing from your origin, so nothing is exposed, but the name is
+public. Put any Access policy in place before the connector first starts.
+
+`cloudflared tunnel login` writes `~/.cloudflared/cert.pem`, which can create
+tunnels and DNS records in the zone you picked. Keep it on your machine; the
+server only ever gets the one tunnel's `<id>.json` credentials.
+
 ## What goes through the tunnel, and what doesn't
 
 **Through the tunnel, behind Cloudflare Access:** anything administrative that

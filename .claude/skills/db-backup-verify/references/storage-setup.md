@@ -23,6 +23,31 @@ inactive if they're removed from the account. On a solo account that sounds
 irrelevant right up until you reorganise something, and the failure mode is
 silent: backups just stop.
 
+### Location: give it a hint
+
+With *Automatic* location, R2 places the bucket near whoever is clicking, or
+somewhere else entirely. One session got **Asia Pacific** for a server in
+Nuremberg. Choose **Provide a location hint → Western Europe (WEUR)**, or
+whatever region is nearest the server. A hint keeps the default endpoint. A
+*jurisdiction* (EU) changes the endpoint (below).
+
+New accounts must add the R2 subscription first (free tier, card on file).
+Until then every R2 URL redirects to the plans page.
+
+### Getting the token onto the server
+
+The token's secret is shown once. Never paste it into a chat or an agent. Use a
+prompt that sends it straight to the host and proves it works:
+
+```bash
+read -rp "Access Key ID: " id; read -rsp "Secret: " secret; echo
+printf '%s\n%s\n' "$id" "$secret" | ssh <target> '
+  read -r id; read -r secret
+  sudo sed -i -e "s|^access_key_id = .*|access_key_id = $id|" \
+              -e "s|^secret_access_key = .*|secret_access_key = $secret|" <rclone.conf>
+  docker run --rm -v <rclone.conf>:/config/rclone/rclone.conf:ro rclone/rclone lsd r2:<bucket>'
+```
+
 ### The endpoint, and the EU trap
 
 ```

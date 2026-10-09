@@ -93,14 +93,38 @@ cmd_apply() {
   cmd_verify
 }
 
+# Persistence is a systemd unit that re-runs `apply` after docker.service, not
+# iptables-persistent: on Ubuntu that package Conflicts with ufw, and installing
+# it silently REMOVES ufw — taking the INPUT policy and the tailnet-only SSH
+# rule with it. The unit is also PartOf docker, so a `systemctl restart docker`
+# (e.g. after editing daemon.json) re-applies the rules too.
+UNIT=/etc/systemd/system/docker-user-firewall.service
+INSTALLED=/usr/local/sbin/docker-firewall.sh
+
 persist() {
-  if command -v netfilter-persistent >/dev/null; then
-    netfilter-persistent save >/dev/null && ok "rules persisted via netfilter-persistent"
-  else
-    warn "iptables-persistent not installed — rules will NOT survive reboot"
-    warn "install it with: DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent"
-    warn "then re-run: $0 apply"
-  fi
+  # The unit runs `apply` itself; it must not rewrite and reload itself.
+  [ "${DOCKER_FW_FROM_UNIT:-0}" = 1 ] && return 0
+  command -v systemctl >/dev/null || { warn "no systemd — rules will NOT survive reboot"; return 0; }
+  [ "$(readlink -f "$0")" = "$INSTALLED" ] || install -m 0755 "$0" "$INSTALLED"
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=DOCKER-USER: drop new inbound on the public interface (vps-provision)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DOCKER_FW_FROM_UNIT=1
+ExecStart=$INSTALLED apply
+
+[Install]
+WantedBy=docker.service
+EOF
+  systemctl daemon-reload
+  systemctl enable docker-user-firewall.service >/dev/null 2>&1
+  ok "rules re-applied at every docker start via docker-user-firewall.service"
 }
 
 cmd_verify() {
@@ -126,6 +150,13 @@ cmd_verify() {
     *"RELATED,ESTABLISHED"*) ok "conntrack rule is evaluated first" ;;
     *) die "rule order wrong — RELATED,ESTABLISHED must precede the interface DROP, got: $first" ;;
   esac
+
+  # Property 3 — the rules come back after a reboot.
+  if systemctl is-enabled -q docker-user-firewall.service 2>/dev/null; then
+    ok "persisted: docker-user-firewall.service is enabled"
+  else
+    die "not persisted — rules vanish at the next reboot; run: $0 apply"
+  fi
 
   if [ "${EGRESS_TEST:-0}" = "1" ]; then
     log "live egress test (pulls busybox once)"
